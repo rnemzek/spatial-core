@@ -2,65 +2,14 @@ import type { LayerConfig, UnindexedFeature } from "./types.js";
 import { getCellPolygon, latLngToCell, DEFAULT_RESOLUTION } from "./h3.js";
 import type { GeoJSONPolygon } from "./h3.js";
 
-export interface GeoJSONPoint {
-  type: "Point";
-  coordinates: [number, number];
-}
-
-export interface GeoJSONFeature<Geometry, Properties> {
-  type: "Feature";
-  id: string;
-  geometry: Geometry;
-  properties: Properties;
-}
-
-export interface GeoJSONFeatureCollection<Geometry, Properties> {
+export type HexCellCollection = {
   type: "FeatureCollection";
-  features: GeoJSONFeature<Geometry, Properties>[];
-}
-
-export interface FeatureProperties {
-  id: string;
-  title: string;
-  topic: string;
-  pinColor: string;
-  icon: string;
-  hoverContentHtml: string;
-}
-
-export type FeatureCollectionOf = GeoJSONFeatureCollection<GeoJSONPoint, FeatureProperties>;
-export type HexCellCollection = GeoJSONFeatureCollection<GeoJSONPolygon, { cell: string }>;
+  features: Array<{ type: "Feature"; id: string; geometry: GeoJSONPolygon; properties: { cell: string } }>;
+};
 
 /** Content shown in a hover tooltip/popup: the feature's rich synopsis card, falling back to its title. */
 export function resolveHoverContent(feature: UnindexedFeature): string {
   return feature.synopsisCardHtml ?? feature.title;
-}
-
-/** Converts a layer's features into a GeoJSON FeatureCollection of points, skipping any without coordinates. */
-export function featuresToFeatureCollection(layerConfig: LayerConfig): FeatureCollectionOf {
-  const features: GeoJSONFeature<GeoJSONPoint, FeatureProperties>[] = [];
-
-  for (const feature of layerConfig.features) {
-    if (!feature.coordinates) continue;
-    features.push({
-      type: "Feature",
-      id: feature.id,
-      geometry: {
-        type: "Point",
-        coordinates: [feature.coordinates.lng, feature.coordinates.lat],
-      },
-      properties: {
-        id: feature.id,
-        title: feature.title,
-        topic: feature.topic,
-        pinColor: layerConfig.style.pinColor,
-        icon: layerConfig.style.icon,
-        hoverContentHtml: resolveHoverContent(feature),
-      },
-    });
-  }
-
-  return { type: "FeatureCollection", features };
 }
 
 /** Builds the deduplicated H3 hexagon overlay covering every geocoded feature in a layer. */
@@ -86,9 +35,9 @@ export function featuresToHexCellCollection(
 }
 
 /**
- * Minimal structural subset of the MapLibre GL / Mapbox GL JS `Map` API this engine relies on.
- * A real map instance from either library satisfies this shape directly, with no adapter needed.
- * Leaflet does not share this source/layer model; a thin Leaflet shim can implement the same interface.
+ * Minimal structural subset of the MapLibre GL / Mapbox GL JS `Map` API this engine relies on for
+ * canvas mechanics (H3 hex overlay source/layer + the background-click listener). A real map instance
+ * from either library satisfies this shape directly, with no adapter needed.
  */
 export interface SpatialMapInstance {
   addSource(id: string, source: { type: "geojson"; data: unknown }): void;
@@ -99,14 +48,41 @@ export interface SpatialMapInstance {
   getLayer(id: string): unknown;
   on(type: string, layerIdOrHandler: string | ((event: any) => void), handler?: (event: any) => void): void;
   off(type: string, layerIdOrHandler: string | ((event: any) => void), handler?: (event: any) => void): void;
-  getCanvas?(): { style: { cursor: string } };
+}
+
+/** Minimal structural subset of the MapLibre GL / Mapbox GL JS `Marker` instance API. */
+export interface MarkerHandle {
+  setLngLat(lngLat: [number, number]): unknown;
+  addTo(map: unknown): unknown;
+  remove(): unknown;
+}
+
+/** Minimal structural subset of the MapLibre GL / Mapbox GL JS `Marker` constructor. */
+export type MarkerClass = new (options: { element: HTMLElement }) => MarkerHandle;
+
+/**
+ * Domain overlay plugged into the engine: owns pin appearance (`renderMarker`) and the domain-level
+ * click/hover behavior for map nodes. The engine handles marker lifecycle and DOM wiring; the overlay
+ * only describes what a node looks like and what should happen when it's interacted with.
+ */
+export interface OverlayConfig {
+  /** Returns the DOM/SVG element rendered for a node's pin. Called once per feature per render. */
+  renderMarker(node: UnindexedFeature): HTMLElement;
+  /** Emitted on a node click. The engine calls `event.stopPropagation()` first to isolate it from the map canvas. */
+  onNodeClick?(node: UnindexedFeature): void;
+  /** Emitted when a node's pin is hovered. */
+  onNodeHover?(node: UnindexedFeature): void;
+  /** Emitted when a hovered node's pin is left. */
+  onNodeLeave?(): void;
+  /** Emitted when the non-navigable map canvas (not a node) is clicked, e.g. to dismiss an active drawer. */
+  onMapBackgroundClick?(): void;
 }
 
 export interface RenderTopicLayerOptions {
-  /** Called with the feature's id when a pin on this layer is clicked. */
-  onFeatureSelect?: (featureId: string) => void;
-  /** Called with the hovered feature (and its resolved hover content) on hover-in, and `null` on hover-out. */
-  onFeatureHover?: (feature: UnindexedFeature | null, hoverContentHtml: string | null) => void;
+  /** Domain overlay describing pin appearance and node click/hover behavior. Required. */
+  overlay: OverlayConfig;
+  /** Marker constructor from the host map library (e.g. `maplibregl.Marker`). Required. */
+  MarkerClass: MarkerClass;
   /** Renders the H3 hexagon cells covering this layer's features beneath the pins. Defaults to false. */
   showH3Overlay?: boolean;
   /** H3 resolution used for the hexagon overlay. Defaults to DEFAULT_RESOLUTION (8). */
@@ -114,33 +90,48 @@ export interface RenderTopicLayerOptions {
 }
 
 export interface RenderedLayerHandle {
-  layerId: string;
-  sourceId: string;
   hexLayerId?: string;
   hexSourceId?: string;
   /** Removes this layer's pins, hexagon overlay, and event listeners from the map. */
   destroy(): void;
 }
 
-const pointLayerId = (layerId: string) => `${layerId}-points`;
-const pointSourceId = (layerId: string) => `${layerId}-points-source`;
 const hexLayerId = (layerId: string) => `${layerId}-hex`;
 const hexSourceId = (layerId: string) => `${layerId}-hex-source`;
 
+function attachMarker(feature: UnindexedFeature, map: SpatialMapInstance, options: RenderTopicLayerOptions): MarkerHandle | null {
+  if (!feature.coordinates) return null;
+  const { overlay, MarkerClass } = options;
+
+  const element = overlay.renderMarker(feature);
+  element.addEventListener("click", (event: MouseEvent) => {
+    event.stopPropagation();
+    overlay.onNodeClick?.(feature);
+  });
+  element.addEventListener("mouseenter", () => overlay.onNodeHover?.(feature));
+  element.addEventListener("mouseleave", () => overlay.onNodeLeave?.());
+
+  const marker = new MarkerClass({ element });
+  marker.setLngLat([feature.coordinates.lng, feature.coordinates.lat]);
+  marker.addTo(map);
+  return marker;
+}
+
 /**
- * Renders a LayerConfig onto a MapLibre/Mapbox-GL-compatible map instance: a GeoJSON source/layer of
- * pins styled per the layer's config, an optional H3 hexagon overlay, and hover/click interactivity.
+ * Renders a LayerConfig onto a MapLibre/Mapbox-GL-compatible map instance: one DOM marker per feature
+ * (appearance and behavior owned by the domain `overlay`), an optional H3 hexagon overlay beneath them,
+ * and a background-click listener isolated from node clicks via `stopPropagation`.
  */
 export function renderTopicLayer(
   map: SpatialMapInstance,
   layerConfig: LayerConfig,
-  options: RenderTopicLayerOptions = {},
+  options: RenderTopicLayerOptions,
 ): RenderedLayerHandle {
-  const layerId = pointLayerId(layerConfig.layerId);
-  const sourceId = pointSourceId(layerConfig.layerId);
-  const featuresById = new Map(layerConfig.features.map((feature) => [feature.id, feature]));
-
-  map.addSource(sourceId, { type: "geojson", data: featuresToFeatureCollection(layerConfig) });
+  const markers = new Map<string, MarkerHandle>();
+  for (const feature of layerConfig.features) {
+    const marker = attachMarker(feature, map, options);
+    if (marker) markers.set(feature.id, marker);
+  }
 
   let hexHandle: { hexLayerId: string; hexSourceId: string } | undefined;
   if (options.showH3Overlay) {
@@ -163,50 +154,16 @@ export function renderTopicLayer(
     hexHandle = { hexLayerId: hexLayer, hexSourceId: hexSource };
   }
 
-  map.addLayer({
-    id: layerId,
-    type: "circle",
-    source: sourceId,
-    paint: {
-      "circle-color": layerConfig.style.pinColor,
-      "circle-radius": 6,
-      "circle-stroke-width": 2,
-      "circle-stroke-color": "#ffffff",
-    },
-  });
-
-  const handleClick = (event: any) => {
-    const featureId = event?.features?.[0]?.properties?.id;
-    if (featureId) options.onFeatureSelect?.(String(featureId));
-  };
-
-  const handleMouseEnter = (event: any) => {
-    if (map.getCanvas) map.getCanvas().style.cursor = "pointer";
-    const featureId = event?.features?.[0]?.properties?.id;
-    const feature = featureId ? featuresById.get(String(featureId)) : undefined;
-    if (feature) options.onFeatureHover?.(feature, resolveHoverContent(feature));
-  };
-
-  const handleMouseLeave = () => {
-    if (map.getCanvas) map.getCanvas().style.cursor = "";
-    options.onFeatureHover?.(null, null);
-  };
-
-  map.on("click", layerId, handleClick);
-  map.on("mouseenter", layerId, handleMouseEnter);
-  map.on("mouseleave", layerId, handleMouseLeave);
+  const handleBackgroundClick = () => options.overlay.onMapBackgroundClick?.();
+  map.on("click", handleBackgroundClick);
 
   return {
-    layerId,
-    sourceId,
     hexLayerId: hexHandle?.hexLayerId,
     hexSourceId: hexHandle?.hexSourceId,
     destroy() {
-      map.off("click", layerId, handleClick);
-      map.off("mouseenter", layerId, handleMouseEnter);
-      map.off("mouseleave", layerId, handleMouseLeave);
-      if (map.getLayer(layerId)) map.removeLayer(layerId);
-      map.removeSource(sourceId);
+      map.off("click", handleBackgroundClick);
+      for (const marker of markers.values()) marker.remove();
+      markers.clear();
       if (hexHandle) {
         if (map.getLayer(hexHandle.hexLayerId)) map.removeLayer(hexHandle.hexLayerId);
         map.removeSource(hexHandle.hexSourceId);
@@ -215,10 +172,19 @@ export function renderTopicLayer(
   };
 }
 
-/** Re-renders a layer already added via renderTopicLayer with updated feature data, in place. */
-export function updateTopicLayer(map: SpatialMapInstance, layerConfig: LayerConfig, handle: RenderedLayerHandle): void {
-  map.getSource(handle.sourceId)?.setData(featuresToFeatureCollection(layerConfig));
-  if (handle.hexSourceId) {
-    map.getSource(handle.hexSourceId)?.setData(featuresToHexCellCollection(layerConfig));
-  }
+/**
+ * Re-renders a layer already added via renderTopicLayer with updated feature data: swaps out all
+ * markers for the new feature list and refreshes the H3 hex overlay data in place.
+ */
+export function updateTopicLayer(
+  map: SpatialMapInstance,
+  layerConfig: LayerConfig,
+  handle: RenderedLayerHandle,
+  options: RenderTopicLayerOptions,
+): void {
+  handle.destroy();
+  const rerendered = renderTopicLayer(map, layerConfig, options);
+  handle.hexLayerId = rerendered.hexLayerId;
+  handle.hexSourceId = rerendered.hexSourceId;
+  handle.destroy = rerendered.destroy;
 }

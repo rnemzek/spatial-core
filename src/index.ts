@@ -11,15 +11,17 @@ export {
   renderTopicLayer,
   updateTopicLayer,
   resolveHoverContent,
-  featuresToFeatureCollection,
   featuresToHexCellCollection,
 } from "./map.js";
 export type {
   SpatialMapInstance,
+  MarkerHandle,
+  MarkerClass,
+  OverlayConfig,
   RenderTopicLayerOptions,
   RenderedLayerHandle,
-  GeoJSONPoint,
-  GeoJSONFeature,
-  GeoJSONFeatureCollection,
-  FeatureProperties,
+  HexCellCollection,
 } from "./map.js";
+export { SpatialCellIndex } from "./spatialCellIndex.js";
+export { GooglePlacesAdapter, discoverNearby } from "./places.js";
+export type { PlacesSearchQuery } from "./places.js";

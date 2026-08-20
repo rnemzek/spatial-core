@@ -2,4 +2,6 @@ export { DEFAULT_RESOLUTION, latLngToCell, gridDisk, cellToBoundary, getCellPoly
 export { evaluateMarketComps, getNearbyCells } from "./agent.js";
 export { geocodeAddress, NullGeocoder } from "./geocoder.js";
 export { UnindexedFeatureSchema, normalizePayload } from "./ingestion/normalizer.js";
-export { renderTopicLayer, updateTopicLayer, resolveHoverContent, featuresToFeatureCollection, featuresToHexCellCollection, } from "./map.js";
+export { renderTopicLayer, updateTopicLayer, resolveHoverContent, featuresToHexCellCollection, } from "./map.js";
+export { SpatialCellIndex } from "./spatialCellIndex.js";
+export { GooglePlacesAdapter, discoverNearby } from "./places.js";
