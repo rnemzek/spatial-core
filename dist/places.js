@@ -14,7 +14,9 @@ export class GooglePlacesAdapter {
     fieldMask;
     constructor({ apiKey, fetchImpl, fieldMask, topic } = {}) {
         this.apiKey = apiKey;
-        this.fetchImpl = fetchImpl ?? fetch;
+        // Bind to globalThis regardless of source: native fetch throws "Illegal invocation" when
+        // called as `this.fetchImpl(...)` (an unbound method call) rather than `window.fetch(...)`.
+        this.fetchImpl = (fetchImpl ?? fetch).bind(globalThis);
         this.fieldMask = fieldMask ?? DEFAULT_FIELD_MASK;
         this.topic = topic ?? "auto";
     }
@@ -57,6 +59,7 @@ export class GooglePlacesAdapter {
                 title: place.displayName?.text ?? "Unnamed location",
                 topic: this.topic,
                 coordinates: { lat, lng },
+                metadata: { googlePlaceId: place.id, primaryType: place.primaryType ?? null },
             });
         }
         return features;

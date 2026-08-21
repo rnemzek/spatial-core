@@ -16,6 +16,7 @@ interface RawPlace {
   id?: string;
   displayName?: { text?: string };
   location?: { latitude?: number; longitude?: number };
+  primaryType?: string;
 }
 
 /**
@@ -36,7 +37,9 @@ export class GooglePlacesAdapter implements IngestionAdapter {
     { apiKey, fetchImpl, fieldMask, topic }: { apiKey?: string; fetchImpl?: typeof fetch; fieldMask?: string; topic?: "auto" | "ev" | "retail" } = {},
   ) {
     this.apiKey = apiKey;
-    this.fetchImpl = fetchImpl ?? fetch;
+    // Bind to globalThis regardless of source: native fetch throws "Illegal invocation" when
+    // called as `this.fetchImpl(...)` (an unbound method call) rather than `window.fetch(...)`.
+    this.fetchImpl = (fetchImpl ?? fetch).bind(globalThis);
     this.fieldMask = fieldMask ?? DEFAULT_FIELD_MASK;
     this.topic = topic ?? "auto";
   }
@@ -80,6 +83,7 @@ export class GooglePlacesAdapter implements IngestionAdapter {
         title: place.displayName?.text ?? "Unnamed location",
         topic: this.topic,
         coordinates: { lat, lng },
+        metadata: { googlePlaceId: place.id, primaryType: place.primaryType ?? null },
       });
     }
     return features;

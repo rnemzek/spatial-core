@@ -55,3 +55,40 @@ test("upsert overwrites a feature indexed under the same id", () => {
   const match = results.find((f) => f.id === "dealer-1");
   assert.equal(match?.title, "New Name");
 });
+
+test("isCellFresh is false for a cell that has never been hydrated", () => {
+  const index = new SpatialCellIndex({ ttlMs: 1000 });
+  assert.equal(index.isCellFresh(ORIGIN.lat, ORIGIN.lng), false);
+});
+
+test("isCellFresh is true immediately after markCellHydrated, within ttlMs", () => {
+  const index = new SpatialCellIndex({ ttlMs: 1000 });
+  index.markCellHydrated(ORIGIN.lat, ORIGIN.lng, 10_000);
+  assert.equal(index.isCellFresh(ORIGIN.lat, ORIGIN.lng, 10_500), true);
+});
+
+test("isCellFresh is false once ttlMs has elapsed since hydration", () => {
+  const index = new SpatialCellIndex({ ttlMs: 1000 });
+  index.markCellHydrated(ORIGIN.lat, ORIGIN.lng, 10_000);
+  assert.equal(index.isCellFresh(ORIGIN.lat, ORIGIN.lng, 11_000), false);
+});
+
+test("isCellFresh never expires when no ttlMs is configured", () => {
+  const index = new SpatialCellIndex();
+  index.markCellHydrated(ORIGIN.lat, ORIGIN.lng, 0);
+  assert.equal(index.isCellFresh(ORIGIN.lat, ORIGIN.lng, Number.MAX_SAFE_INTEGER), true);
+});
+
+test("markCellHydrated/isCellFresh operate per-H3-cell, not per exact point", () => {
+  const index = new SpatialCellIndex({ ttlMs: 1000 });
+  const nearbyPoint = { lat: ORIGIN.lat + 0.0001, lng: ORIGIN.lng + 0.0001 };
+  index.markCellHydrated(ORIGIN.lat, ORIGIN.lng, 5000);
+  assert.equal(index.isCellFresh(nearbyPoint.lat, nearbyPoint.lng, 5100), true);
+});
+
+test("a cell can be marked fresh with zero indexed features", () => {
+  const index = new SpatialCellIndex({ ttlMs: 1000 });
+  index.markCellHydrated(ORIGIN.lat, ORIGIN.lng, 5000);
+  assert.equal(index.isCellFresh(ORIGIN.lat, ORIGIN.lng, 5100), true);
+  assert.deepEqual(index.queryNearby(ORIGIN.lat, ORIGIN.lng, 5), []);
+});

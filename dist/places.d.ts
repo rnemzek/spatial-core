@@ -16,6 +16,7 @@ interface RawPlace {
         latitude?: number;
         longitude?: number;
     };
+    primaryType?: string;
 }
 /**
  * Google Places (New) `searchNearby` adapter — the spatial-hydration "Look Far" gap-fill source.
