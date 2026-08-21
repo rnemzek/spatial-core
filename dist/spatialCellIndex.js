@@ -4,13 +4,20 @@ import { getNearbyCells } from "./agent.js";
  * H3-indexed cache of geocoded features, keyed by cell then feature id. Used to cache spatial-hydration
  * fallback results (e.g. Places API discoveries) so repeated nearby queries don't re-fetch or re-index
  * nodes already known to the engine.
+ *
+ * Also tracks per-cell hydration timestamps, independent of feature presence: a cell can be legitimately
+ * hydrated with zero results, so "is this cell fresh" (skip re-fetching) is a distinct question from
+ * "does this cell have any features." See markCellHydrated/isCellFresh.
  */
 export class SpatialCellIndex {
     resolution;
+    ttlMs;
     cells = new Map();
     featureIds = new Set();
-    constructor(resolution = DEFAULT_RESOLUTION) {
+    hydratedAt = new Map();
+    constructor({ resolution = DEFAULT_RESOLUTION, ttlMs } = {}) {
         this.resolution = resolution;
+        this.ttlMs = ttlMs;
     }
     /** Indexes a feature into its H3 cell. No-ops for features without coordinates. */
     upsert(feature) {
@@ -37,5 +44,23 @@ export class SpatialCellIndex {
             results.push(...bucket.values());
         }
         return results;
+    }
+    /** Records the H3 cell containing `lat`/`lng` as hydrated at `at` (defaults to now). */
+    markCellHydrated(lat, lng, at = Date.now()) {
+        const cell = latLngToCell(lat, lng, this.resolution);
+        this.hydratedAt.set(cell, at);
+    }
+    /**
+     * Whether the H3 cell containing `lat`/`lng` was hydrated within `ttlMs`. Always false for a cell
+     * that's never been marked hydrated. Always true (once hydrated) when no `ttlMs` was configured.
+     */
+    isCellFresh(lat, lng, now = Date.now()) {
+        const cell = latLngToCell(lat, lng, this.resolution);
+        const hydratedAt = this.hydratedAt.get(cell);
+        if (hydratedAt === undefined)
+            return false;
+        if (this.ttlMs === undefined)
+            return true;
+        return now - hydratedAt < this.ttlMs;
     }
 }

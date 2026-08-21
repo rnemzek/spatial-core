@@ -57,6 +57,7 @@ export class GooglePlacesAdapter {
                 title: place.displayName?.text ?? "Unnamed location",
                 topic: this.topic,
                 coordinates: { lat, lng },
+                metadata: { googlePlaceId: place.id, primaryType: place.primaryType ?? null },
             });
         }
         return features;

@@ -10,7 +10,12 @@ function fakePlacesResponse(overrides = {}) {
     ok: true,
     json: async () => ({
       places: [
-        { id: "place-1", displayName: { text: "Leland Auto Gallery" }, location: { latitude: 34.24, longitude: -78.01 } },
+        {
+          id: "place-1",
+          displayName: { text: "Leland Auto Gallery" },
+          location: { latitude: 34.24, longitude: -78.01 },
+          primaryType: "electric_vehicle_charging_station",
+        },
         { id: "place-2", displayName: { text: "Coastal Motors" }, location: { latitude: 34.23, longitude: -78.02 } },
       ],
       ...overrides,
@@ -42,6 +47,16 @@ test("normalize maps raw Places results into UnindexedFeatures", async () => {
   assert.equal(features[0].title, "Leland Auto Gallery");
   assert.equal(features[0].topic, "auto");
   assert.deepEqual(features[0].coordinates, { lat: 34.24, lng: -78.01 });
+  assert.deepEqual(features[0].metadata, { googlePlaceId: "place-1", primaryType: "electric_vehicle_charging_station" });
+});
+
+test("normalize defaults primaryType to null when the field mask didn't request/return it", async () => {
+  const adapter = new GooglePlacesAdapter({ apiKey: "test-key" });
+  const raw = await fakePlacesResponse().json();
+  const features = await adapter.normalize(raw);
+
+  assert.equal(features[1].id, "place-2");
+  assert.deepEqual(features[1].metadata, { googlePlaceId: "place-2", primaryType: null });
 });
 
 test("fetchRaw short-circuits with no network call when no apiKey is configured", async () => {

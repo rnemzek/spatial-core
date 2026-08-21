@@ -16,6 +16,7 @@ interface RawPlace {
   id?: string;
   displayName?: { text?: string };
   location?: { latitude?: number; longitude?: number };
+  primaryType?: string;
 }
 
 /**
@@ -80,6 +81,7 @@ export class GooglePlacesAdapter implements IngestionAdapter {
         title: place.displayName?.text ?? "Unnamed location",
         topic: this.topic,
         coordinates: { lat, lng },
+        metadata: { googlePlaceId: place.id, primaryType: place.primaryType ?? null },
       });
     }
     return features;
