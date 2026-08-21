@@ -25,7 +25,9 @@ export class GooglePlacesGeocoder {
     fieldMask;
     constructor({ apiKey, fetchImpl, fieldMask } = {}) {
         this.apiKey = apiKey;
-        this.fetchImpl = fetchImpl ?? fetch;
+        // A bare `fetch` reference throws "Illegal invocation" when called detached from `window`/
+        // `globalThis` (the spec's branding check) — bind it so the default path works in a real browser.
+        this.fetchImpl = fetchImpl ?? fetch.bind(globalThis);
         this.fieldMask = fieldMask ?? DEFAULT_GEOCODER_FIELD_MASK;
     }
     async resolve(address) {

@@ -14,7 +14,8 @@ export class GooglePlacesAdapter {
     fieldMask;
     constructor({ apiKey, fetchImpl, fieldMask, topic } = {}) {
         this.apiKey = apiKey;
-        this.fetchImpl = fetchImpl ?? fetch;
+        // See geocoder.ts's GooglePlacesGeocoder for why this can't be a bare `fetch` reference.
+        this.fetchImpl = fetchImpl ?? fetch.bind(globalThis);
         this.fieldMask = fieldMask ?? DEFAULT_FIELD_MASK;
         this.topic = topic ?? "auto";
     }

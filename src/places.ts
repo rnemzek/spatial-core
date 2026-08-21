@@ -37,7 +37,8 @@ export class GooglePlacesAdapter implements IngestionAdapter {
     { apiKey, fetchImpl, fieldMask, topic }: { apiKey?: string; fetchImpl?: typeof fetch; fieldMask?: string; topic?: "auto" | "ev" | "retail" } = {},
   ) {
     this.apiKey = apiKey;
-    this.fetchImpl = fetchImpl ?? fetch;
+    // See geocoder.ts's GooglePlacesGeocoder for why this can't be a bare `fetch` reference.
+    this.fetchImpl = fetchImpl ?? fetch.bind(globalThis);
     this.fieldMask = fieldMask ?? DEFAULT_FIELD_MASK;
     this.topic = topic ?? "auto";
   }
