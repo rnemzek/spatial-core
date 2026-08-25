@@ -73,9 +73,19 @@ export class GooglePlacesGeocoder implements GeocoderResolver {
     this.fieldMask = fieldMask ?? DEFAULT_GEOCODER_FIELD_MASK;
   }
 
+  /** Resolves the first match only — see `resolveMany` for the full candidate list. */
   async resolve(address: string): Promise<GeocodedPlace | null> {
+    return (await this.resolveMany(address, 1))[0] ?? null;
+  }
+
+  /**
+   * Resolves up to `limit` candidate matches (for autocomplete/suggestion UIs). Google's Text Search
+   * response already returns multiple `places` in one call, so this needs no extra request beyond
+   * what `resolve` already made — just maps more of the same response.
+   */
+  async resolveMany(address: string, limit = 5): Promise<GeocodedPlace[]> {
     const query = address.trim();
-    if (!query || !this.apiKey) return null;
+    if (!query || !this.apiKey) return [];
 
     const response = await this.fetchImpl(PLACES_SEARCH_TEXT_URL, {
       method: "POST",
@@ -87,35 +97,40 @@ export class GooglePlacesGeocoder implements GeocoderResolver {
       body: JSON.stringify({ textQuery: query }),
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) return [];
 
     const data = await response.json().catch(() => null);
-    const place: RawTextSearchPlace | undefined = data?.places?.[0];
-    const lat = place?.location?.latitude;
-    const lng = place?.location?.longitude;
-    if (typeof lat !== "number" || typeof lng !== "number") return null;
+    const rawPlaces: RawTextSearchPlace[] = Array.isArray(data?.places) ? data.places : [];
 
-    const viewport = place?.viewport;
-    const boundingBox =
-      typeof viewport?.low?.latitude === "number" &&
-      typeof viewport?.low?.longitude === "number" &&
-      typeof viewport?.high?.latitude === "number" &&
-      typeof viewport?.high?.longitude === "number"
-        ? {
-            south: viewport.low.latitude,
-            west: viewport.low.longitude,
-            north: viewport.high.latitude,
-            east: viewport.high.longitude,
-          }
-        : undefined;
+    const places: GeocodedPlace[] = [];
+    for (const place of rawPlaces.slice(0, limit)) {
+      const lat = place?.location?.latitude;
+      const lng = place?.location?.longitude;
+      if (typeof lat !== "number" || typeof lng !== "number") continue;
 
-    return {
-      lat,
-      lng,
-      displayName: place?.displayName?.text ?? query,
-      formattedAddress: place?.formattedAddress ?? place?.displayName?.text ?? query,
-      boundingBox,
-    };
+      const viewport = place?.viewport;
+      const boundingBox =
+        typeof viewport?.low?.latitude === "number" &&
+        typeof viewport?.low?.longitude === "number" &&
+        typeof viewport?.high?.latitude === "number" &&
+        typeof viewport?.high?.longitude === "number"
+          ? {
+              south: viewport.low.latitude,
+              west: viewport.low.longitude,
+              north: viewport.high.latitude,
+              east: viewport.high.longitude,
+            }
+          : undefined;
+
+      places.push({
+        lat,
+        lng,
+        displayName: place?.displayName?.text ?? query,
+        formattedAddress: place?.formattedAddress ?? place?.displayName?.text ?? query,
+        boundingBox,
+      });
+    }
+    return places;
   }
 }
 
@@ -156,41 +171,52 @@ export class OpenStreetMapGeocoder implements GeocoderResolver {
     this.userAgent = userAgent;
   }
 
+  /** Resolves the first match only — see `resolveMany` for the full candidate list. */
   async resolve(address: string): Promise<GeocodedPlace | null> {
+    return (await this.resolveMany(address, 1))[0] ?? null;
+  }
+
+  /** Resolves up to `limit` candidate matches (for autocomplete/suggestion UIs) — Nominatim's `/search` already supports `limit` directly. */
+  async resolveMany(address: string, limit = 5): Promise<GeocodedPlace[]> {
     const query = address.trim();
-    if (!query) return null;
+    if (!query) return [];
 
     const url = new URL(this.baseUrl);
     url.searchParams.set("format", "jsonv2");
     url.searchParams.set("q", query);
-    url.searchParams.set("limit", "1");
+    url.searchParams.set("limit", String(limit));
 
     const headers: Record<string, string> = {};
     if (this.userAgent) headers["User-Agent"] = this.userAgent;
 
     const response = await this.fetchImpl(url.toString(), { headers });
-    if (!response.ok) return null;
+    if (!response.ok) return [];
 
     const data = await response.json().catch(() => null);
-    const place: RawNominatimPlace | undefined = Array.isArray(data) ? data[0] : undefined;
-    if (!place) return null;
+    // Also cap client-side rather than trusting the server to honor `limit` — same defensive
+    // posture as GooglePlacesGeocoder.resolveMany, which can't rely on a request-side limit at all.
+    const rawPlaces: RawNominatimPlace[] = (Array.isArray(data) ? data : []).slice(0, limit);
 
-    const lat = Number(place.lat);
-    const lng = Number(place.lon);
-    if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+    const places: GeocodedPlace[] = [];
+    for (const place of rawPlaces) {
+      const lat = Number(place.lat);
+      const lng = Number(place.lon);
+      if (Number.isNaN(lat) || Number.isNaN(lng)) continue;
 
-    const bbox = place.boundingbox;
-    const boundingBox =
-      Array.isArray(bbox) && bbox.length === 4
-        ? { south: Number(bbox[0]), north: Number(bbox[1]), west: Number(bbox[2]), east: Number(bbox[3]) }
-        : undefined;
+      const bbox = place.boundingbox;
+      const boundingBox =
+        Array.isArray(bbox) && bbox.length === 4
+          ? { south: Number(bbox[0]), north: Number(bbox[1]), west: Number(bbox[2]), east: Number(bbox[3]) }
+          : undefined;
 
-    return {
-      lat,
-      lng,
-      displayName: place.name ?? place.display_name ?? query,
-      formattedAddress: place.display_name ?? query,
-      boundingBox,
-    };
+      places.push({
+        lat,
+        lng,
+        displayName: place.name ?? place.display_name ?? query,
+        formattedAddress: place.display_name ?? query,
+        boundingBox,
+      });
+    }
+    return places;
   }
 }

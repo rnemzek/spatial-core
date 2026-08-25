@@ -130,6 +130,86 @@ test("GooglePlacesGeocoder.resolve returns null when no places are found", async
   assert.equal(await geocoder.resolve("Nowhereville"), null);
 });
 
+function fakeMultiTextSearchResponse() {
+  return {
+    ok: true,
+    json: async () => ({
+      places: [
+        { location: { latitude: 30.4213, longitude: -87.2169 }, displayName: { text: "Pensacola, FL" } },
+        { location: { latitude: 30.5, longitude: -87.3 }, displayName: { text: "Pensacola Beach, FL" } },
+        { location: { latitude: 30.6, longitude: -87.4 }, displayName: { text: "Pensacola NAS, FL" } },
+      ],
+    }),
+  };
+}
+
+test("GooglePlacesGeocoder.resolveMany maps every returned place, capped at the requested limit", async () => {
+  const geocoder = new GooglePlacesGeocoder({
+    apiKey: "test-key",
+    fetchImpl: (async () => fakeMultiTextSearchResponse()) as unknown as typeof fetch,
+  });
+
+  const results = await geocoder.resolveMany("Pensacola, FL", 2);
+  assert.equal(results.length, 2);
+  assert.deepEqual(
+    results.map((r) => r.displayName),
+    ["Pensacola, FL", "Pensacola Beach, FL"],
+  );
+});
+
+test("GooglePlacesGeocoder.resolveMany defaults to a limit of 5 and skips malformed entries missing coordinates", async () => {
+  const geocoder = new GooglePlacesGeocoder({
+    apiKey: "test-key",
+    fetchImpl: (async () => ({
+      ok: true,
+      json: async () => ({
+        places: [
+          { location: { latitude: 1, longitude: 2 }, displayName: { text: "A" } },
+          { displayName: { text: "Missing coordinates" } },
+          { location: { latitude: 3, longitude: 4 }, displayName: { text: "B" } },
+        ],
+      }),
+    })) as unknown as typeof fetch,
+  });
+
+  const results = await geocoder.resolveMany("Somewhere");
+  assert.deepEqual(
+    results.map((r) => r.displayName),
+    ["A", "B"],
+  );
+});
+
+test("GooglePlacesGeocoder.resolveMany returns [] with no network call when no apiKey is configured", async () => {
+  let called = false;
+  const fetchImpl = async () => {
+    called = true;
+    return fakeMultiTextSearchResponse();
+  };
+  const geocoder = new GooglePlacesGeocoder({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+  assert.deepEqual(await geocoder.resolveMany("Pensacola, FL"), []);
+  assert.equal(called, false);
+});
+
+test("GooglePlacesGeocoder.resolveMany returns [] on a non-ok response", async () => {
+  const geocoder = new GooglePlacesGeocoder({
+    apiKey: "test-key",
+    fetchImpl: (async () => ({ ok: false, json: async () => ({}) })) as unknown as typeof fetch,
+  });
+
+  assert.deepEqual(await geocoder.resolveMany("Nowhere"), []);
+});
+
+test("GooglePlacesGeocoder.resolve delegates to resolveMany and returns just the first match", async () => {
+  const geocoder = new GooglePlacesGeocoder({
+    apiKey: "test-key",
+    fetchImpl: (async () => fakeMultiTextSearchResponse()) as unknown as typeof fetch,
+  });
+
+  const result = await geocoder.resolve("Pensacola, FL");
+  assert.equal(result?.displayName, "Pensacola, FL");
+});
+
 function fakeNominatimResponse(overrides: any[] | null = null) {
   return {
     ok: true,
@@ -274,4 +354,68 @@ test("OpenStreetMapGeocoder.resolve returns null when lat/lon are unparseable as
   });
 
   assert.equal(await geocoder.resolve("Nowhere"), null);
+});
+
+function fakeMultiNominatimResponse() {
+  return {
+    ok: true,
+    json: async () => [
+      { lat: "30.4213", lon: "-87.2169", name: "Pensacola" },
+      { lat: "30.5", lon: "-87.3", name: "Pensacola Beach" },
+      { lat: "30.6", lon: "-87.4", name: "Pensacola NAS" },
+    ],
+  };
+}
+
+test("OpenStreetMapGeocoder.resolveMany sends the requested limit and maps every returned place, capped at it", async () => {
+  let capturedUrl: string | null = null;
+  const fetchImpl = async (url: string) => {
+    capturedUrl = url;
+    return fakeMultiNominatimResponse();
+  };
+  const geocoder = new OpenStreetMapGeocoder({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+  const results = await geocoder.resolveMany("Pensacola, FL", 2);
+  assert.equal(new URL(capturedUrl as unknown as string).searchParams.get("limit"), "2");
+  assert.equal(results.length, 2);
+  assert.deepEqual(
+    results.map((r) => r.displayName),
+    ["Pensacola", "Pensacola Beach"],
+  );
+});
+
+test("OpenStreetMapGeocoder.resolveMany defaults to a limit of 5 and skips entries with unparseable coordinates", async () => {
+  const geocoder = new OpenStreetMapGeocoder({
+    fetchImpl: (async () => ({
+      ok: true,
+      json: async () => [
+        { lat: "1", lon: "2", name: "A" },
+        { lat: "not-a-number", lon: "2", name: "Bad" },
+        { lat: "3", lon: "4", name: "B" },
+      ],
+    })) as unknown as typeof fetch,
+  });
+
+  const results = await geocoder.resolveMany("Somewhere");
+  assert.deepEqual(
+    results.map((r) => r.displayName),
+    ["A", "B"],
+  );
+});
+
+test("OpenStreetMapGeocoder.resolveMany returns [] on a non-ok response, without requiring an apiKey", async () => {
+  const geocoder = new OpenStreetMapGeocoder({
+    fetchImpl: (async () => ({ ok: false, json: async () => [] })) as unknown as typeof fetch,
+  });
+
+  assert.deepEqual(await geocoder.resolveMany("Nowhere"), []);
+});
+
+test("OpenStreetMapGeocoder.resolve delegates to resolveMany and returns just the first match", async () => {
+  const geocoder = new OpenStreetMapGeocoder({
+    fetchImpl: (async () => fakeMultiNominatimResponse()) as unknown as typeof fetch,
+  });
+
+  const result = await geocoder.resolve("Pensacola, FL");
+  assert.equal(result?.displayName, "Pensacola");
 });

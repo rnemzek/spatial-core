@@ -40,7 +40,14 @@ export declare class GooglePlacesGeocoder implements GeocoderResolver {
         fetchImpl?: typeof fetch;
         fieldMask?: string;
     });
+    /** Resolves the first match only — see `resolveMany` for the full candidate list. */
     resolve(address: string): Promise<GeocodedPlace | null>;
+    /**
+     * Resolves up to `limit` candidate matches (for autocomplete/suggestion UIs). Google's Text Search
+     * response already returns multiple `places` in one call, so this needs no extra request beyond
+     * what `resolve` already made — just maps more of the same response.
+     */
+    resolveMany(address: string, limit?: number): Promise<GeocodedPlace[]>;
 }
 /**
  * OpenStreetMap (Nominatim) resolver — a zero-cost, no-API-key alternative to GooglePlacesGeocoder.
@@ -65,5 +72,8 @@ export declare class OpenStreetMapGeocoder implements GeocoderResolver {
         fetchImpl?: typeof fetch;
         userAgent?: string;
     });
+    /** Resolves the first match only — see `resolveMany` for the full candidate list. */
     resolve(address: string): Promise<GeocodedPlace | null>;
+    /** Resolves up to `limit` candidate matches (for autocomplete/suggestion UIs) — Nominatim's `/search` already supports `limit` directly. */
+    resolveMany(address: string, limit?: number): Promise<GeocodedPlace[]>;
 }
