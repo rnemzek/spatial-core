@@ -118,3 +118,79 @@ export class GooglePlacesGeocoder implements GeocoderResolver {
     };
   }
 }
+
+const NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search";
+
+interface RawNominatimPlace {
+  lat?: string;
+  lon?: string;
+  name?: string;
+  display_name?: string;
+  boundingbox?: [string, string, string, string];
+}
+
+/**
+ * OpenStreetMap (Nominatim) resolver — a zero-cost, no-API-key alternative to GooglePlacesGeocoder.
+ * Accepts free-form queries (street addresses, ZIP codes, "City, ST") and resolves the first match.
+ * Dependency-injectable `fetchImpl` (default bound to `globalThis`, per GooglePlacesGeocoder's
+ * "Illegal invocation" note above), `baseUrl` (to target a self-hosted instance or Photon-compatible
+ * endpoint), and an optional `userAgent` — Nominatim's usage policy asks for a custom User-Agent/Referer
+ * identifying the calling app, capped at 1 req/sec with no bulk use; browsers forbid scripts from
+ * setting the User-Agent header via fetch, so this is a no-op there and only takes effect for
+ * server-side/Node call sites.
+ *
+ * Nominatim's response quirks this normalizes away: `lat`/`lon` are strings, not numbers, and
+ * `boundingbox` is `[south, north, west, east]` (Google's viewport is `{north,south,east,west}`) — get
+ * either wrong and you silently get NaN coordinates or a transposed bounding box.
+ */
+export class OpenStreetMapGeocoder implements GeocoderResolver {
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+  private readonly userAgent?: string;
+
+  constructor(
+    { baseUrl, fetchImpl, userAgent }: { baseUrl?: string; fetchImpl?: typeof fetch; userAgent?: string } = {},
+  ) {
+    this.baseUrl = baseUrl ?? NOMINATIM_SEARCH_URL;
+    this.fetchImpl = fetchImpl ?? fetch.bind(globalThis);
+    this.userAgent = userAgent;
+  }
+
+  async resolve(address: string): Promise<GeocodedPlace | null> {
+    const query = address.trim();
+    if (!query) return null;
+
+    const url = new URL(this.baseUrl);
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", "1");
+
+    const headers: Record<string, string> = {};
+    if (this.userAgent) headers["User-Agent"] = this.userAgent;
+
+    const response = await this.fetchImpl(url.toString(), { headers });
+    if (!response.ok) return null;
+
+    const data = await response.json().catch(() => null);
+    const place: RawNominatimPlace | undefined = Array.isArray(data) ? data[0] : undefined;
+    if (!place) return null;
+
+    const lat = Number(place.lat);
+    const lng = Number(place.lon);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+
+    const bbox = place.boundingbox;
+    const boundingBox =
+      Array.isArray(bbox) && bbox.length === 4
+        ? { south: Number(bbox[0]), north: Number(bbox[1]), west: Number(bbox[2]), east: Number(bbox[3]) }
+        : undefined;
+
+    return {
+      lat,
+      lng,
+      displayName: place.name ?? place.display_name ?? query,
+      formattedAddress: place.display_name ?? query,
+      boundingBox,
+    };
+  }
+}
